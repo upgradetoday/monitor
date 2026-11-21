@@ -249,19 +249,19 @@ def fix_count_phrase(item):
     return f"{n} critical vulnerabilit{'ies' if n != 1 else 'y'}"
 
 
+def item_sentence(item):
+    """Plain-English answer for one product: the text search engines and AI assistants quote."""
+    if not item["version"]:
+        return ""
+    when = nice_date(item["date"])
+    s = f"The latest {item['name']} release is {item['version']}"
+    s += f", released {when}" if when else ""
+    fixes = fix_count_phrase(item)
+    return s + (f". It fixes {fixes}." if fixes else ".")
+
+
 def summary_sentences(data):
-    """Plain-English answer: the text search engines and AI assistants quote."""
-    out = []
-    for item in data:
-        if not item["version"]:
-            continue
-        when = nice_date(item["date"])
-        s = f"The latest {item['name']} release is {item['version']}"
-        s += f", released {when}" if when else ""
-        fixes = fix_count_phrase(item)
-        s += f". It fixes {fixes}." if fixes else "."
-        out.append(s)
-    return " ".join(out)
+    return " ".join(s for s in (item_sentence(i) for i in data) if s)
 
 
 def page_title(data):
@@ -401,7 +401,9 @@ def card(item):
         cls = ""
     else:
         version, meta, cls = "—", "Couldn't reach the data source", " error"
+    sentence = item_sentence(item)
     return f"""
+     <div class="col">
       <section class="card{cls}">
         <a class="top" href="{html.escape(item['link'])}" target="_blank" rel="noopener">
           <span class="label">{name}</span>
@@ -409,7 +411,9 @@ def card(item):
           <span class="meta">{meta}</span>
         </a>
         {vuln_section(item)}
-      </section>"""
+      </section>
+      <p class="caption">{html.escape(sentence)}</p>
+     </div>"""
 
 
 def render(data, checked_at):
@@ -417,7 +421,7 @@ def render(data, checked_at):
     iso = checked_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     fallback = checked_at.strftime("%b %d, %Y · %H:%M UTC")
     tip = (f'<a class="tip" href="{html.escape(TIP_JAR_URL)}" target="_blank" rel="noopener">'
-           f'<span aria-hidden="true">💚</span> {html.escape(TIP_JAR_TEXT)}</a>' if TIP_JAR_URL else "")
+           f'<span class="heart" aria-hidden="true">♥</span> {html.escape(TIP_JAR_TEXT)}</a>' if TIP_JAR_URL else "")
     title = html.escape(page_title(data))
     summary = summary_sentences(data)
     description = html.escape(summary or "The latest WordPress and Drupal releases, and only the critical "
@@ -446,28 +450,42 @@ def render(data, checked_at):
 </script>
 <style>
   :root {{
-    --bg: #0f1115; --surface: #171a21; --border: #262a33;
+    --bg: #0b0d11; --panel: #14171d; --surface: #1b1f27; --border: #2a2f39;
     --text: #e8eaed; --muted: #8b919c; --accent: #4ade80;
     --critical: #f87171; --critical-bg: rgba(248,113,113,.10);
+    --tip: #7fb0e8;
   }}
   @media (prefers-color-scheme: light) {{
-    :root {{ --bg: #f6f7f9; --surface: #fff; --border: #e3e5e9;
+    :root {{ --bg: #ffffff; --panel: #f1f2f4; --surface: #fff; --border: #e3e5e9;
             --text: #14161a; --muted: #6b7280; --accent: #15803d;
-            --critical: #b91c1c; --critical-bg: rgba(185,28,28,.07); }}
+            --critical: #b91c1c; --critical-bg: rgba(185,28,28,.07);
+            --tip: #2f6aa8; }}
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
     width: 100%; min-height: 100vh;
     display: flex; flex-direction: column; align-items: center; justify-content: safe center;
-    gap: 2.5rem; padding: 2rem;
+    gap: 2rem; padding: 1.5rem;
     background: var(--bg); color: var(--text);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }}
+  .panel {{
+    width: 100%; max-width: 980px;
+    display: flex; flex-direction: column; align-items: center; gap: 2.5rem;
+    padding: clamp(2rem, 5vw, 3.5rem) clamp(1rem, 4vw, 3rem);
+    background: var(--panel); border-radius: 28px;
+  }}
+  /* Each column spans two shared grid rows (card, caption), so cards line up at equal height */
+  .col {{ display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: .75rem; }}
+  .caption {{ font-size: .8rem; line-height: 1.5; color: var(--muted); text-align: center; text-wrap: balance; padding: 0 .75rem; }}
+  .tip {{ color: var(--tip); text-decoration: none; font-weight: 600; font-size: .95rem; }}
+  .tip .heart {{ font-size: 1.05em; }}
+  .tip:hover {{ text-decoration: underline; }}
   .hero {{ display: flex; flex-direction: column; align-items: center; gap: 1.25rem; text-align: center; max-width: 820px; }}
   .headline {{
     font-family: "Inter", "Helvetica Neue", Arial, system-ui, sans-serif;
     font-size: clamp(2rem, 6vw, 3rem); font-weight: 800; line-height: 1.1;
-    letter-spacing: -.025em; text-wrap: balance; color: var(--text);
+    letter-spacing: -.015em; text-wrap: balance; color: var(--text);
   }}
   .pixel .pB {{ fill: var(--muted); }}
   .pixel .pS {{ fill: #0b0f0c; }}
@@ -479,12 +497,14 @@ def render(data, checked_at):
   .eyebrow {{ font-size: .8rem; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }}
   .grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 1.5rem; width: 100%; max-width: 820px; align-items: start;
+    column-gap: 1.5rem; row-gap: 2rem; width: 100%; max-width: 820px;
   }}
   .card {{
+    display: flex; flex-direction: column;
     border-radius: 16px; background: var(--surface); border: 1px solid var(--border);
     overflow: hidden; transition: border-color .15s ease;
   }}
+  .card .vulns {{ flex: 1; }}
   .card:hover {{ border-color: var(--accent); }}
   .top {{
     display: flex; flex-direction: column; align-items: center; gap: .75rem;
@@ -518,22 +538,24 @@ def render(data, checked_at):
   }}
   .score.level {{ font: 600 .65rem/1.9 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }}
   .cve {{ color: var(--muted); font-size: .75rem; white-space: nowrap; }}
-  .summary {{ max-width: 640px; font-size: .9rem; line-height: 1.6; color: var(--muted); text-align: center; text-wrap: balance; }}
-  footer {{ display: flex; flex-direction: column; gap: .5rem; font-size: .75rem; color: var(--muted); text-align: center; }}
+  footer {{
+    display: flex; flex-direction: column; gap: .4rem; padding-bottom: .5rem;
+    font-size: .75rem; line-height: 1.5; color: var(--muted); text-align: center; max-width: 980px;
+  }}
   footer a {{ color: inherit; }}
-  footer .tip {{ color: var(--accent); text-decoration: none; font-weight: 600; font-size: .85rem; }}
-  footer .tip:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
-  <header class="hero">
-    {pixel_art_svg(PIXEL_MONITOR)}
-    <p class="headline">For all the humans still running security the old way…</p>
-    <h1 class="eyebrow">Latest WordPress &amp; Drupal Releases</h1>
-  </header>
-  <main class="grid">{cards}
+  <main class="panel">
+    <header class="hero">
+      {pixel_art_svg(PIXEL_MONITOR)}
+      <p class="headline">For all the humans still running security the old way…</p>
+      <h1 class="eyebrow">Latest WordPress &amp; Drupal Releases</h1>
+    </header>
+    <div class="grid">{cards}
+    </div>
+    {tip}
   </main>
-  <p class="summary">{html.escape(summary)}</p>
   <footer>
     <p>Checked <time id="checked" datetime="{iso}">{fallback}</time> · Versions from <a href="https://endoflife.date">endoflife.date</a>
       · Vulnerabilities from <a href="https://www.wordfence.com/threat-intel/">Wordfence Intelligence</a>
@@ -541,7 +563,6 @@ def render(data, checked_at):
       · <a href="latest.json">JSON</a></p>
     <p>Idea &amp; conceptual design by {html.escape(AUTHOR_NAME)} - Code &amp; UI written by Claude
       · <a href="{html.escape(SOURCE_URL)}">Source</a></p>
-    {f"<p>{tip}</p>" if tip else ""}
   </footer>
   <script>
     // Show the check time in the visitor's own time zone
