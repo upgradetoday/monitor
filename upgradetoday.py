@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # --- Site attribution (edit these) ---
 AUTHOR_NAME = "Ben"
 TIP_JAR_URL = ""  # e.g. "https://ko-fi.com/yourname" — the tip link is hidden while empty
-SOURCE_URL = "https://upgradetoday.github.io/monitor/"
+SOURCE_URL = "https://github.com/upgradetoday/monitor"
 
 # --- Settings ---
 PORT = int(os.environ.get("PORT", 8000))
@@ -188,6 +188,32 @@ def get_data():
 
 # ---------- rendering ----------
 
+# A little CRT monitor with a blinking cursor. B=bezel, S=screen, G=glyph, C=cursor, R=power light
+PIXEL_MONITOR = """
+.BBBBBBBBBBBBBB.
+.BSSSSSSSSSSSSB.
+.BSGSSSSSSSSSSB.
+.BSSGSSSSSSSSSB.
+.BSGSSCCCSSSSSB.
+.BSSSSSSSSSSSSB.
+.BBBBBBBBBBBBBB.
+.BBBBBBBBBBBRBB.
+.....BBBBBB.....
+...BBBBBBBBBB...
+"""
+
+
+def pixel_art_svg(art, px=6):
+    rows = [r for r in art.strip().splitlines()]
+    w, h = len(rows[0]), len(rows)
+    rects = "".join(
+        f'<rect class="p{ch}" x="{x}" y="{y}" width="1" height="1"/>'
+        for y, row in enumerate(rows) for x, ch in enumerate(row) if ch != "."
+    )
+    return (f'<svg class="pixel" viewBox="0 0 {w} {h}" width="{w * px}" height="{h * px}" '
+            f'shape-rendering="crispEdges" aria-hidden="true">{rects}</svg>')
+
+
 def vuln_section(item):
     if item.get("vuln_error"):
         return f'<div class="vulns"><p class="none">{html.escape(item["vuln_error"])}</p></div>'
@@ -256,15 +282,27 @@ def render(data, checked_at):
             --critical: #b91c1c; --critical-bg: rgba(185,28,28,.07); }}
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  html, body {{ height: 100%; }}
   body {{
     width: 100%; min-height: 100vh;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: safe center;
     gap: 2.5rem; padding: 2rem;
     background: var(--bg); color: var(--text);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }}
-  h1 {{ font-size: .8rem; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }}
+  .hero {{ display: flex; flex-direction: column; align-items: center; gap: 1.25rem; text-align: center; max-width: 820px; }}
+  .headline {{
+    font-family: "Inter", "Helvetica Neue", Arial, system-ui, sans-serif;
+    font-size: clamp(2rem, 6vw, 3rem); font-weight: 800; line-height: 1.1;
+    letter-spacing: -.025em; text-wrap: balance; color: var(--text);
+  }}
+  .pixel .pB {{ fill: var(--muted); }}
+  .pixel .pS {{ fill: #0b0f0c; }}
+  .pixel .pG {{ fill: #4ade80; }}
+  .pixel .pC {{ fill: #4ade80; animation: blink 1.1s steps(1) infinite; }}
+  .pixel .pR {{ fill: var(--critical); }}
+  @keyframes blink {{ 50% {{ opacity: 0; }} }}
+  @media (prefers-reduced-motion: reduce) {{ .pixel .pC {{ animation: none; }} }}
+  .eyebrow {{ font-size: .8rem; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }}
   .grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 1.5rem; width: 100%; max-width: 820px; align-items: start;
@@ -313,7 +351,11 @@ def render(data, checked_at):
 </style>
 </head>
 <body>
-  <h1>Latest Stable Release</h1>
+  <header class="hero">
+    {pixel_art_svg(PIXEL_MONITOR)}
+    <h1 class="headline">For all the humans still running security the old way…</h1>
+    <p class="eyebrow">Latest Stable Release</p>
+  </header>
   <main class="grid">{cards}
   </main>
   <footer>
