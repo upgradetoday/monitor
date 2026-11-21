@@ -20,14 +20,17 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- Site attribution (edit these) ---
+# --- Site settings (edit these) ---
+SITE_URL = "https://upgradetoday.dev"
 AUTHOR_NAME = "Ben"
-TIP_JAR_URL = ""  # e.g. "https://ko-fi.com/yourname" — the tip link is hidden while empty
+TIP_JAR_URL = "https://ko-fi.com/YOUR-HANDLE"  # TODO: replace with your Ko-fi page
+TIP_JAR_TEXT = "Patch my caffeine vulnerability"
 SOURCE_URL = "https://github.com/upgradetoday/monitor"
 
 # --- Settings ---
@@ -39,7 +42,7 @@ WORDFENCE_KEY = os.environ.get("WORDFENCE_API_KEY", "")
 CORE_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".wordpress_core_vulns.json")
 DRUPAL_RSS_URL = "https://www.drupal.org/security/rss.xml"
 DRUPAL_CRITICAL_LEVELS = ("Highly critical", "Critical")
-USER_AGENT = "upgradetoday/1.0 (+https://upgradetoday.io)"
+USER_AGENT = f"upgradetoday/1.0 (+{SITE_URL})"
 
 PRODUCTS = [
     ("wordpress", "WordPress", "https://wordpress.org/download/"),
@@ -214,6 +217,157 @@ def pixel_art_svg(art, px=6):
             f'shape-rendering="crispEdges" aria-hidden="true">{rects}</svg>')
 
 
+def favicon_svg(art):
+    """Same pixel monitor as a standalone favicon (inline colors, no CSS)."""
+    colors = {"B": "#8b919c", "S": "#0b0f0c", "G": "#4ade80", "C": "#4ade80", "R": "#f87171"}
+    rows = [r for r in art.strip().splitlines()]
+    w, h = len(rows[0]), len(rows)
+    rects = "".join(
+        f'<rect fill="{colors[ch]}" x="{x}" y="{y}" width="1" height="1"/>'
+        for y, row in enumerate(rows) for x, ch in enumerate(row) if ch != "."
+    )
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -{(w - h) // 2} {w} {w}" '
+            f'shape-rendering="crispEdges">{rects}</svg>')
+
+
+# ---------- SEO / machine-readable text ----------
+
+def nice_date(iso_date):
+    try:
+        d = datetime.strptime(iso_date[:10], "%Y-%m-%d")
+        return f"{d:%b} {d.day}, {d.year}"
+    except (ValueError, TypeError):
+        return ""
+
+
+def fix_count_phrase(item):
+    if item.get("vuln_error") or item["vulns"] is None:
+        return ""
+    n = len(item["vulns"])
+    if n == 0:
+        return "no critical vulnerabilities"
+    return f"{n} critical vulnerabilit{'ies' if n != 1 else 'y'}"
+
+
+def summary_sentences(data):
+    """Plain-English answer: the text search engines and AI assistants quote."""
+    out = []
+    for item in data:
+        if not item["version"]:
+            continue
+        when = nice_date(item["date"])
+        s = f"The latest {item['name']} release is {item['version']}"
+        s += f", released {when}" if when else ""
+        fixes = fix_count_phrase(item)
+        s += f". It fixes {fixes}." if fixes else "."
+        out.append(s)
+    return " ".join(out)
+
+
+def page_title(data):
+    parts = [f"{i['name']} {i['version']}" for i in data if i["version"]]
+    lead = " & ".join(parts) if parts else "Latest WordPress & Drupal releases"
+    return f"{lead}: Critical Security Fixes | Upgrade Today"
+
+
+def latest_json(data, checked_at):
+    return {
+        "checked": checked_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": SITE_URL,
+        "products": {
+            i["slug"]: {
+                "name": i["name"],
+                "latest_version": i["version"],
+                "released": i["date"] or None,
+                "critical_fixes": i["vulns"],
+            }
+            for i in data
+        },
+    }
+
+
+def json_ld(data, checked_at):
+    return {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": "Upgrade Today",
+        "url": SITE_URL + "/",
+        "description": summary_sentences(data),
+        "dateModified": checked_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "mainEntity": {
+            "@type": "ItemList",
+            "itemListElement": [
+                {
+                    "@type": "ListItem",
+                    "position": n,
+                    "item": {
+                        "@type": "SoftwareApplication",
+                        "name": i["name"],
+                        "softwareVersion": i["version"],
+                        **({"datePublished": i["date"]} if i["date"] else {}),
+                        "applicationCategory": "WebApplication",
+                        "operatingSystem": "Cross-platform",
+                        "url": i["link"],
+                    },
+                }
+                for n, i in enumerate((i for i in data if i["version"]), start=1)
+            ],
+        },
+    }
+
+
+def robots_txt():
+    bots = ["GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-User",
+            "PerplexityBot", "Google-Extended", "Applebot-Extended", "Bingbot", "Googlebot"]
+    rules = "\n".join(f"User-agent: {b}\nAllow: /\n" for b in bots)
+    return f"# AI assistants and search engines are welcome here.\n{rules}\nUser-agent: *\nAllow: /\n\nSitemap: {SITE_URL}/sitemap.xml\n"
+
+
+def sitemap_xml(data, checked_at):
+    dates = [i["date"][:10] for i in data if i["date"]]
+    lastmod = max(dates) if dates else checked_at.strftime("%Y-%m-%d")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>{SITE_URL}/</loc><lastmod>{lastmod}</lastmod><changefreq>hourly</changefreq></url>
+</urlset>
+"""
+
+
+def llms_txt(data, checked_at):
+    lines = [
+        "# Upgrade Today",
+        "",
+        "> Do I need to upgrade WordPress or Drupal today? This page shows the latest stable release "
+        "of each, and only the critical security vulnerabilities that release fixes. Updated hourly.",
+        "",
+        f"Last checked: {checked_at:%Y-%m-%d %H:%M} UTC",
+        "",
+        "## Current answer",
+        "",
+    ]
+    for item in data:
+        if not item["version"]:
+            continue
+        when = nice_date(item["date"])
+        lines.append(f"- {item['name']} {item['version']}" + (f" (released {when})" if when else ""))
+        for v in item["vulns"] or []:
+            cve = f", {v['cve']}" if v["cve"] else ""
+            lines.append(f"  - Critical fix: {v['title']} (severity {v['score']}{cve}) — {v['link']}")
+        if item["vulns"] == []:
+            lines.append("  - No critical fixes in this release")
+    lines += [
+        "",
+        "## Data",
+        "",
+        f"- [latest.json]({SITE_URL}/latest.json): the same information as JSON",
+        "- Versions: endoflife.date. WordPress vulnerabilities: Wordfence Intelligence (core entries rated Critical "
+        "whose patched versions include the latest release). Drupal: drupal.org core advisories rated "
+        "Critical or Highly critical that name the latest release as the fix.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def vuln_section(item):
     if item.get("vuln_error"):
         return f'<div class="vulns"><p class="none">{html.escape(item["vuln_error"])}</p></div>'
@@ -241,7 +395,9 @@ def card(item):
     name = html.escape(item["name"])
     if item["version"]:
         version = html.escape(item["version"])
-        meta = f"Released {html.escape(item['date'])}" if item["date"] else "&nbsp;"
+        when = nice_date(item["date"])
+        meta = (f'Released <time datetime="{html.escape(item["date"][:10])}">{when}</time>'
+                if when else "&nbsp;")
         cls = ""
     else:
         version, meta, cls = "—", "Couldn't reach the data source", " error"
@@ -260,16 +416,34 @@ def render(data, checked_at):
     cards = "".join(card(i) for i in data)
     iso = checked_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     fallback = checked_at.strftime("%b %d, %Y · %H:%M UTC")
-    tip = (f' · <a class="tip" href="{html.escape(TIP_JAR_URL)}" target="_blank" rel="noopener">☕ Tip jar</a>'
-           if TIP_JAR_URL else "")
+    tip = (f'<a class="tip" href="{html.escape(TIP_JAR_URL)}" target="_blank" rel="noopener">'
+           f'<span aria-hidden="true">💚</span> {html.escape(TIP_JAR_TEXT)}</a>' if TIP_JAR_URL else "")
+    title = html.escape(page_title(data))
+    summary = summary_sentences(data)
+    description = html.escape(summary or "The latest WordPress and Drupal releases, and only the critical "
+                                         "security vulnerabilities each one fixes. Updated hourly.")
+    ld = json.dumps(json_ld(data, checked_at), indent=1).replace("</", "<\\/")
+    favicon = "data:image/svg+xml," + urllib.parse.quote(favicon_svg(PIXEL_MONITOR))
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="{PAGE_REFRESH_SECONDS}">
-<meta name="description" content="Latest WordPress and Drupal releases, and the critical vulnerabilities each one fixes.">
-<title>Upgrade Today — latest WordPress &amp; Drupal releases</title>
+<title>{title}</title>
+<meta name="description" content="{description}">
+<link rel="canonical" href="{SITE_URL}/">
+<link rel="icon" href="{favicon}">
+<link rel="alternate" type="application/json" href="{SITE_URL}/latest.json" title="Latest versions as JSON">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Upgrade Today">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{SITE_URL}/">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{ld}
+</script>
 <style>
   :root {{
     --bg: #0f1115; --surface: #171a21; --border: #262a33;
@@ -344,50 +518,66 @@ def render(data, checked_at):
   }}
   .score.level {{ font: 600 .65rem/1.9 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }}
   .cve {{ color: var(--muted); font-size: .75rem; white-space: nowrap; }}
+  .summary {{ max-width: 640px; font-size: .9rem; line-height: 1.6; color: var(--muted); text-align: center; text-wrap: balance; }}
   footer {{ display: flex; flex-direction: column; gap: .5rem; font-size: .75rem; color: var(--muted); text-align: center; }}
   footer a {{ color: inherit; }}
-  footer .tip {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
+  footer .tip {{ color: var(--accent); text-decoration: none; font-weight: 600; font-size: .85rem; }}
   footer .tip:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
   <header class="hero">
     {pixel_art_svg(PIXEL_MONITOR)}
-    <h1 class="headline">For all the humans still running security the old way…</h1>
-    <p class="eyebrow">Latest Stable Release</p>
+    <p class="headline">For all the humans still running security the old way…</p>
+    <h1 class="eyebrow">Latest WordPress &amp; Drupal Releases</h1>
   </header>
   <main class="grid">{cards}
   </main>
+  <p class="summary">{html.escape(summary)}</p>
   <footer>
-    <p>Checked <time datetime="{iso}">{fallback}</time> · Versions from <a href="https://endoflife.date">endoflife.date</a>
+    <p>Checked <time id="checked" datetime="{iso}">{fallback}</time> · Versions from <a href="https://endoflife.date">endoflife.date</a>
       · Vulnerabilities from <a href="https://www.wordfence.com/threat-intel/">Wordfence Intelligence</a>
-      and <a href="https://www.drupal.org/security">Drupal Security</a></p>
-    <p>Idea &amp; conceptual design by {html.escape(AUTHOR_NAME)} · Code & UI written with Claude
-      · <a href="{html.escape(SOURCE_URL)}">Source</a>{tip}</p>
+      and <a href="https://www.drupal.org/security">Drupal Security</a>
+      · <a href="latest.json">JSON</a></p>
+    <p>Idea &amp; conceptual design by {html.escape(AUTHOR_NAME)} - Code &amp; UI written by Claude
+      · <a href="{html.escape(SOURCE_URL)}">Source</a></p>
+    {f"<p>{tip}</p>" if tip else ""}
   </footer>
   <script>
     // Show the check time in the visitor's own time zone
-    const t = document.querySelector("time");
+    const t = document.getElementById("checked");
     t.textContent = new Date(t.dateTime).toLocaleString([], {{dateStyle: "medium", timeStyle: "short"}});
   </script>
 </body>
 </html>"""
 
 
-def build_page():
-    return render(get_data(), datetime.now(timezone.utc))
+def build_site(data=None, checked_at=None):
+    """Every file the site publishes: {filename: (content, content_type)}."""
+    data = data if data is not None else get_data()
+    checked_at = checked_at or datetime.now(timezone.utc)
+    return {
+        "index.html": (render(data, checked_at), "text/html; charset=utf-8"),
+        "latest.json": (json.dumps(latest_json(data, checked_at), indent=2) + "\n", "application/json"),
+        "llms.txt": (llms_txt(data, checked_at), "text/plain; charset=utf-8"),
+        "robots.txt": (robots_txt(), "text/plain; charset=utf-8"),
+        "sitemap.xml": (sitemap_xml(data, checked_at), "application/xml"),
+    }
 
 
 # ---------- entry points ----------
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path not in ("/", "/index.html"):
+        name = self.path.split("?")[0].lstrip("/") or "index.html"
+        site = build_site()
+        if name not in site:
             self.send_error(404)
             return
-        body = build_page().encode()
+        content, ctype = site[name]
+        body = content.encode()
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -401,11 +591,13 @@ if __name__ == "__main__":
         print("Note: WORDFENCE_API_KEY not set — WordPress vulnerabilities will be skipped.", file=sys.stderr)
 
     if len(sys.argv) == 3 and sys.argv[1] == "--build":
-        out = sys.argv[2]
-        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        with open(out, "w") as f:
-            f.write(build_page())
-        print(f"Wrote {out}")
+        # Writes index.html plus latest.json, llms.txt, robots.txt and sitemap.xml beside it
+        out_dir = os.path.dirname(sys.argv[2]) or "."
+        os.makedirs(out_dir, exist_ok=True)
+        for name, (content, _) in build_site().items():
+            with open(os.path.join(out_dir, name), "w") as f:
+                f.write(content)
+            print(f"Wrote {os.path.join(out_dir, name)}")
     else:
         print(f"Serving on http://localhost:{PORT}  (Ctrl+C to stop)")
         HTTPServer(("", PORT), Handler).serve_forever()
