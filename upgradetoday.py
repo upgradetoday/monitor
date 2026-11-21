@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # --- Site attribution (edit these) ---
 AUTHOR_NAME = "Ben"
 TIP_JAR_URL = ""  # e.g. "https://ko-fi.com/yourname" — the tip link is hidden while empty
-SOURCE_URL = "https://github.com/upgradetoday/upgradetoday"
+SOURCE_URL = "https://upgradetoday.github.io/monitor/"
 
 # --- Settings ---
 PORT = int(os.environ.get("PORT", 8000))
@@ -320,7 +320,7 @@ def render(data, checked_at):
     <p>Checked <time datetime="{iso}">{fallback}</time> · Versions from <a href="https://endoflife.date">endoflife.date</a>
       · Vulnerabilities from <a href="https://www.wordfence.com/threat-intel/">Wordfence Intelligence</a>
       and <a href="https://www.drupal.org/security">Drupal Security</a></p>
-    <p>Idea &amp; design by {html.escape(AUTHOR_NAME)} · Code written with Claude
+    <p>Idea &amp; conceptual design by {html.escape(AUTHOR_NAME)} · Code & UI written with Claude
       · <a href="{html.escape(SOURCE_URL)}">Source</a>{tip}</p>
   </footer>
   <script>
